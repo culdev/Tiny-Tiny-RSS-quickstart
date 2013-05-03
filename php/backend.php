@@ -1,6 +1,6 @@
 <?php
-	set_include_path(get_include_path() . PATH_SEPARATOR .
-		dirname(__FILE__) . "/include");
+	set_include_path(dirname(__FILE__) ."/include" . PATH_SEPARATOR .
+		get_include_path());
 
 	/* remove ill effects of magic quotes */
 
@@ -37,30 +37,36 @@
 
 	@$csrf_token = $_REQUEST['csrf_token'];
 
-	require_once "functions.php";
+	require_once "autoload.php";
 	require_once "sessions.php";
+	require_once "functions.php";
 	require_once "config.php";
 	require_once "db.php";
 	require_once "db-prefs.php";
 
-	no_cache_incantation();
-
 	startup_gettext();
 
-	$script_started = getmicrotime();
+	$script_started = microtime(true);
 
-	$link = db_connect(DB_HOST, DB_USER, DB_PASS, DB_NAME);
+	if (!init_plugins()) return;
 
-	if (!init_connection($link)) return;
-
-	header("Content-Type: text/plain; charset=utf-8");
+	header("Content-Type: text/json; charset=utf-8");
 
 	if (ENABLE_GZIP_OUTPUT && function_exists("ob_gzhandler")) {
 		ob_start("ob_gzhandler");
 	}
 
 	if (SINGLE_USER_MODE) {
-		authenticate_user($link, "admin", null);
+		authenticate_user( "admin", null);
+	}
+
+	if ($_SESSION["uid"]) {
+		if (!validate_session()) {
+			header("Content-Type: text/json");
+			print json_encode(array("error" => array("code" => 6)));
+			return;
+		}
+		load_user_plugins( $_SESSION["uid"]);
 	}
 
 	$purge_intervals = array(
@@ -93,23 +99,12 @@
 		1440 => __("Daily"),
 		10080 => __("Weekly"));
 
-	$update_methods = array(
-		0   => __("Default"),
-		1   => __("Magpie"),
-		2   => __("SimplePie"));
-
-	if (DEFAULT_UPDATE_METHOD == "1") {
-		$update_methods[0] .= ' (SimplePie)';
-	} else {
-		$update_methods[0] .= ' (Magpie)';
-	}
-
 	$access_level_names = array(
 		0 => __("User"),
 		5 => __("Power User"),
 		10 => __("Administrator"));
 
-	#$error = sanity_check($link);
+	#$error = sanity_check();
 
 	#if ($error['code'] != 0 && $op != "logout") {
 	#	print json_encode(array("error" => $error));
@@ -118,33 +113,42 @@
 
 	$op = str_replace("-", "_", $op);
 
-	if (class_exists($op)) {
-		$handler = new $op($link, $_REQUEST);
+	$override = PluginHost::getInstance()->lookup_handler($op, $method);
 
-		if ($handler && is_subclass_of($handler, 'Handler')) {
+	if (class_exists($op) || $override) {
+
+		if ($override) {
+			$handler = $override;
+		} else {
+			$handler = new $op($_REQUEST);
+		}
+
+		if ($handler && implements_interface($handler, 'IHandler')) {
 			if (validate_csrf($csrf_token) || $handler->csrf_ignore($method)) {
 				if ($handler->before($method)) {
 					if ($method && method_exists($handler, $method)) {
 						$handler->$method();
+					} else {
+						if (method_exists($handler, "catchall")) {
+							$handler->catchall($method);
+						}
 					}
 					$handler->after();
 					return;
 				} else {
-					header("Content-Type: text/plain");
+					header("Content-Type: text/json");
 					print json_encode(array("error" => array("code" => 6)));
 					return;
 				}
 			} else {
-				header("Content-Type: text/plain");
+				header("Content-Type: text/json");
 				print json_encode(array("error" => array("code" => 6)));
 				return;
 			}
 		}
 	}
 
-	header("Content-Type: text/plain");
+	header("Content-Type: text/json");
 	print json_encode(array("error" => array("code" => 7)));
 
-	// We close the connection to database.
-	db_close($link);
 ?>

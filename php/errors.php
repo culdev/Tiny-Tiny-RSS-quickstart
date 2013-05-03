@@ -1,6 +1,6 @@
 <?php
-	set_include_path(get_include_path() . PATH_SEPARATOR . 
-		dirname(__FILE__) . "/include");
+	set_include_path(dirname(__FILE__) ."/include" . PATH_SEPARATOR .
+		get_include_path());
 
 	require_once "functions.php";
 
@@ -12,7 +12,7 @@
 	$ERRORS[2] = __("This program requires cookies " .
 			"to function properly. Your browser doesn't seem to support them.");
 
-	$ERRORS[3] = __("Backend sanity check failed");
+	$ERRORS[3] = __("Backend sanity check failed.");
 
 	$ERRORS[4] = __("Frontend sanity check failed.");
 
@@ -28,8 +28,7 @@
 
 	$ERRORS[9] = __("Configuration check failed");
 
-	$ERRORS[10] = __("Your version of MySQL is not currently supported. Please see
-		official site for more information.");
+	$ERRORS[10] = __("Your version of MySQL is not currently supported. Please see official site for more information.");
 
 	$ERRORS[11] = "[This error is not returned by server]";
 

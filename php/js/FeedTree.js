@@ -100,13 +100,13 @@ dojo.declare("fox.FeedTree", dijit.Tree, {
 	_createTreeNode: function(args) {
 		var tnode = new dijit._TreeNode(args);
 
-		if (args.item.icon)
+		if (args.item.icon && args.item.icon[0])
 			tnode.iconNode.src = args.item.icon[0];
 
 		var id = args.item.id[0];
 		var bare_id = parseInt(id.substr(id.indexOf(':')+1));
 
-		if (bare_id < -10) {
+		if (bare_id < _label_base_index) {
 			var span = dojo.doc.createElement('span');
 			var fg_color = args.item.fg_color[0];
 			var bg_color = args.item.bg_color[0];
@@ -148,7 +148,7 @@ dojo.declare("fox.FeedTree", dijit.Tree, {
 			tnode._menu = menu;
 		}
 
-		if (id.match("CAT:") && bare_id > 0) {
+		if (id.match("CAT:") && bare_id >= 0) {
 			var menu = new dijit.Menu();
 			menu.row_id = bare_id;
 
@@ -161,6 +161,29 @@ dojo.declare("fox.FeedTree", dijit.Tree, {
 			menu.bindDomNode(tnode.domNode);
 			tnode._menu = menu;
 		}
+
+		if (id.match("CAT:")) {
+			loading = dojo.doc.createElement('img');
+			loading.className = 'loadingNode';
+			loading.src = 'images/blank_icon.gif';
+			dojo.place(loading, tnode.labelNode, 'after');
+			tnode.loadingNode = loading;
+		}
+
+		if (id.match("CAT:") && bare_id == -1) {
+			var menu = new dijit.Menu();
+			menu.row_id = bare_id;
+
+			menu.addChild(new dijit.MenuItem({
+				label: __("Mark all feeds as read"),
+				onClick: function() {
+					catchupAllFeeds();
+				}}));
+
+			menu.bindDomNode(tnode.domNode);
+			tnode._menu = menu;
+		}
+
 
 		//tnode.labelNode.innerHTML = args.label;
 		return tnode;
@@ -195,7 +218,63 @@ dojo.declare("fox.FeedTree", dijit.Tree, {
 
 		return label;
 	},
+	expandParentNodes: function(feed, is_cat, list) {
+		try {
+			for (var i = 0; i < list.length; i++) {
+				var id = String(list[i].id);
+				var item = this._itemNodesMap[id];
+
+				if (item) {
+					item = item[0];
+					this._expandNode(item);
+				}
+			}
+		} catch (e) {
+			exception_error("expandParentNodes", e);
+		}
+	},
+	findNodeParentsAndExpandThem: function(feed, is_cat, root, parents) {
+		// expands all parents of specified feed to properly mark it as active
+		// my fav thing about frameworks is doing everything myself
+		try {
+			var test_id = is_cat ? 'CAT:' + feed : 'FEED:' + feed;
+
+			if (!root) {
+				if (!this.model || !this.model.store) return false;
+
+				var items = this.model.store._arrayOfTopLevelItems;
+
+				for (var i = 0; i < items.length; i++) {
+					if (String(items[i].id) == test_id) {
+						this.expandParentNodes(feed, is_cat, parents);
+					} else {
+						this.findNodeParentsAndExpandThem(feed, is_cat, items[i], []);
+					}
+				}
+			} else {
+				if (root.items) {
+					parents.push(root);
+
+					for (var i = 0; i < root.items.length; i++) {
+						if (String(root.items[i].id) == test_id) {
+							this.expandParentNodes(feed, is_cat, parents);
+						} else {
+							this.findNodeParentsAndExpandThem(feed, is_cat, root.items[i], parents.slice(0));
+						}
+					}
+				} else {
+					if (String(root.id) == test_id) {
+						this.expandParentNodes(feed, is_cat, parents.slice(0));
+					}
+				}
+			}
+		} catch (e) {
+			exception_error("findNodeParentsAndExpandThem", e);
+		}
+	},
 	selectFeed: function(feed, is_cat) {
+		this.findNodeParentsAndExpandThem(feed, is_cat, false, false);
+
 		if (is_cat)
 			treeNode = this._itemNodesMap['CAT:' + feed];
 		else
@@ -228,8 +307,15 @@ dojo.declare("fox.FeedTree", dijit.Tree, {
 
 		if (treeNode) {
 			treeNode = treeNode[0];
-			treeNode.expandoNode.src = src;
-			return true;
+			if (is_cat) {
+				if (treeNode.loadingNode) {
+					treeNode.loadingNode.src = src;
+					return true;
+				}
+			} else {
+				treeNode.expandoNode.src = src;
+				return true;
+			}
 		}
 
 		return false;
@@ -294,7 +380,7 @@ dojo.declare("fox.FeedTree", dijit.Tree, {
 				var node = tree._itemNodesMap[id];
 
 				if (node) {
-					if (hide && unread == 0 && (bare_id > 0 || !show_special)) {
+					if (hide && unread == 0 && (bare_id > 0 || bare_id < _label_base_index || !show_special)) {
 						Effect.Fade(node[0].rowNode, {duration : 0.3,
 							queue: { position: 'end', scope: 'FFADE-' + id, limit: 1 }});
 					} else {
@@ -316,33 +402,12 @@ dojo.declare("fox.FeedTree", dijit.Tree, {
 		var item = tree.model.store._itemsByIdentity['CAT:' + id];
 
 		if (node && item) {
-			var hidden = tree.model.store.getValue(item, 'hidden');
-
-			if (hidden)
+			if (!node.isExpanded)
 				tree._expandNode(node);
 			else
 				tree._collapseNode(node);
 
-			tree.model.store.setValue(item, 'hidden', !hidden);
 		}
-	},
-	collapseHiddenCats: function() {
-		if (!this.model.hasCats()) return;
-
-		var cats = this.model.store._arrayOfTopLevelItems;
-		var tree = this;
-
-		dojo.forEach(cats, function(cat) {
-			var hidden = tree.model.store.getValue(cat, 'hidden');
-			var id = tree.model.store.getValue(cat, 'id');
-			var node = tree._itemNodesMap[id][0];
-
-			if (hidden)
-				tree._collapseNode(node);
-			else
-				tree._expandNode(node);
-
-		});
 	},
 	getVisibleUnreadFeeds: function() {
 		var items = this.model.store._arrayOfAllItems;

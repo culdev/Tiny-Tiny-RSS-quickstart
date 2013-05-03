@@ -3,8 +3,6 @@ var _infscroll_request_sent = 0;
 var _search_query = false;
 var _viewfeed_last = 0;
 
-var counter_timeout_id = false;
-
 var counters_last_request = 0;
 
 function viewCategory(cat) {
@@ -68,66 +66,16 @@ function viewfeed(feed, method, is_cat, offset, background, infscroll_req) {
 
 		last_requested_article = 0;
 
-		var cached_headlines = false;
-
-		if (feed == getActiveFeedId() && activeFeedIsCat() == is_cat) {
-			cache_delete("feed:" + feed + ":" + is_cat);
-		} else {
-			cached_headlines = cache_get("feed:" + feed + ":" + is_cat);
-
+		if (feed != getActiveFeedId() || activeFeedIsCat() != is_cat) {
 			if (!background && _search_query) _search_query = false;
-
-			// switching to a different feed, we might as well catchup stuff visible
-			// in headlines buffer (if any)
-			// disabled for now because this behavior is considered confusing -fox
-			/* if (!background && isCdmMode() && getInitParam("cdm_auto_catchup") == 1 && parseInt(getActiveFeedId()) > 0) {
-
-				$$("#headlines-frame > div[id*=RROW][class*=Unread]").each(
-					function(child) {
-						var hf = $("headlines-frame");
-
-						if (hf.scrollTop + hf.offsetHeight >=
-								child.offsetTop + child.offsetHeight) {
-
-							var id = child.id.replace("RROW-", "");
-
-							if (catchup_id_batch.indexOf(id) == -1)
-								catchup_id_batch.push(id);
-
-						}
-
-						if (catchup_id_batch.length > 0) {
-							window.clearTimeout(catchup_timeout_id);
-
-							if (!_infscroll_request_sent) {
-								catchup_timeout_id = window.setTimeout('catchupBatchedArticles()',
-									2000);
-							}
-						}
-
-					});
-			} */
 		}
-
-		if (offset == 0 && !background)
-			dijit.byId("content-tabs").selectChild(
-				dijit.byId("content-tabs").getChildren()[0]);
 
 		if (!background) {
 			_viewfeed_last = get_timestamp();
 
 			if (getActiveFeedId() != feed || offset == 0) {
-				active_post_id = 0;
+				setActiveArticleId(0);
 				_infscroll_disable = 0;
-			}
-
-			if (!offset && !method && cached_headlines && !background) {
-				try {
-					render_local_headlines(feed, is_cat, JSON.parse(cached_headlines));
-					return;
-				} catch (e) {
-					console.warn("render_local_headlines failed: " + e);
-				}
 			}
 
 			if (offset != 0 && !method) {
@@ -140,8 +88,6 @@ function viewfeed(feed, method, is_cat, offset, background, infscroll_req) {
 
 				_infscroll_request_sent = timestamp;
 			}
-
-			hideAuxDlg();
 		}
 
 		Form.enable("main_toolbar_form");
@@ -177,24 +123,23 @@ function viewfeed(feed, method, is_cat, offset, background, infscroll_req) {
 
 			Form.enable("main_toolbar_form");
 
-			if (!offset)
-				if (!is_cat) {
-					if (!setFeedExpandoIcon(feed, is_cat, 'images/indicator_white.gif'))
-						notify_progress("Loading, please wait...", true);
-				} else {
+			if (!setFeedExpandoIcon(feed, is_cat,
+				(is_cat) ? 'images/indicator_tiny.gif' : 'images/indicator_white.gif'))
 					notify_progress("Loading, please wait...", true);
-				}
 		}
 
 		query += "&cat=" + is_cat;
 
 		console.log(query);
 
+		setActiveFeedId(feed, is_cat);
+
 		new Ajax.Request("backend.php", {
 			parameters: query,
 			onComplete: function(transport) {
 				setFeedExpandoIcon(feed, is_cat, 'images/blank_icon.gif');
 				headlines_callback2(transport, offset, background, infscroll_req);
+				PluginHost.run(PluginHost.HOOK_FEED_LOADED, [feed, is_cat]);
 			} });
 
 	} catch (e) {
@@ -206,90 +151,61 @@ function feedlist_init() {
 	try {
 		console.log("in feedlist init");
 
-		hideOrShowFeeds(getInitParam("hide_read_feeds") == 1);
+		loading_set_progress(50);
+
 		document.onkeydown = hotkey_handler;
 		setTimeout("hotkey_prefix_timeout()", 5*1000);
 
-		 if (!getActiveFeedId()) {
-			setTimeout("viewfeed(-3)", 100);
+		if (!getActiveFeedId()) {
+			viewfeed(-3);
+		} else {
+ 			viewfeed(getActiveFeedId(), '', activeFeedIsCat());
 		}
-
-		console.log("T:" +
-				getInitParam("cdm_auto_catchup") + " " + getFeedUnread(-3));
 
 		hideOrShowFeeds(getInitParam("hide_read_feeds") == 1);
 
-		setTimeout("timeout()", 5000);
-		setTimeout("precache_headlines_idle()", 15000);
+		request_counters(true);
+		timeout();
 
 	} catch (e) {
 		exception_error("feedlist/init", e);
 	}
 }
 
-function request_counters_real() {
+
+function request_counters(force) {
 	try {
-		console.log("requesting counters...");
-
-		var query = "?op=rpc&method=getAllCounters&seq=" + next_seq();
-
-		query = query + "&omode=flc";
-
-		new Ajax.Request("backend.php", {
-			parameters: query,
-			onComplete: function(transport) {
-				try {
-					handle_rpc_json(transport);
-				} catch (e) {
-					exception_error("viewfeed/getcounters", e);
-				}
-			} });
-
-	} catch (e) {
-		exception_error("request_counters_real", e);
-	}
-}
-
-
-function request_counters() {
-
-	try {
-
-		//if (getInitParam("bw_limit") == "1") return;
-
 		var date = new Date();
 		var timestamp = Math.round(date.getTime() / 1000);
 
-		if (timestamp - counters_last_request > 5) {
+		if (force || timestamp - counters_last_request > 5) {
 			console.log("scheduling request of counters...");
 
-			window.clearTimeout(counter_timeout_id);
-			counter_timeout_id = window.setTimeout("request_counters_real()", 1000);
-
 			counters_last_request = timestamp;
+
+			var query = "?op=rpc&method=getAllCounters&seq=" + next_seq();
+
+			if (!force)
+				query = query + "&last_article_id=" + getInitParam("last_article_id");
+
+			console.log(query);
+
+			new Ajax.Request("backend.php", {
+				parameters: query,
+				onComplete: function(transport) {
+					try {
+						handle_rpc_json(transport);
+					} catch (e) {
+						exception_error("request_counters", e);
+					}
+				} });
+
 		} else {
 			console.log("request_counters: rate limit reached: " + (timestamp - counters_last_request));
 		}
 
 	} catch (e) {
 		exception_error("request_counters", e);
-	}
-}
-
-function displayNewContentPrompt(id) {
-	try {
-
-		var msg = "<a href='#' onclick='viewCurrentFeed()'>" +
-			__("New articles available in this feed (click to show)") + "</a>";
-
-		msg = msg.replace("%s", getFeedName(id));
-
-		$('auxDlg').innerHTML = msg;
-
-		new Effect.Appear('auxDlg', {duration : 0.5});
-
-	} catch (e) {
-		exception_error("displayNewContentPrompt", e);
 	}
 }
 
@@ -315,17 +231,8 @@ function parse_counters(elems, scheduled_call) {
 				continue;
 			}
 
-			// TODO: enable new content notification for categories
-
-			if (!activeFeedIsCat() && id == getActiveFeedId()
-					&& ctr > getFeedUnread(id) && scheduled_call) {
-				displayNewContentPrompt(id);
-			}
-
 			if (getFeedUnread(id, (kind == "cat")) != ctr ||
 					(kind == "cat")) {
-
-				cache_delete("feed:" + id + ":" + (kind == "cat"));
 			}
 
 			setFeedUnread(id, (kind == "cat"), ctr);
@@ -478,8 +385,8 @@ function getNextUnreadFeed(feed, is_cat) {
 	}
 }
 
-function catchupCurrentFeed() {
-	return catchupFeed(getActiveFeedId(), activeFeedIsCat());
+function catchupCurrentFeed(mode) {
+	catchupFeed(getActiveFeedId(), activeFeedIsCat(), mode);
 }
 
 function catchupFeedInGroup(id) {
@@ -498,11 +405,26 @@ function catchupFeedInGroup(id) {
 	}
 }
 
-function catchupFeed(feed, is_cat) {
+function catchupFeed(feed, is_cat, mode) {
 	try {
 		if (is_cat == undefined) is_cat = false;
 
-		var str = __("Mark all articles in %s as read?");
+		var str = false;
+
+		switch (mode) {
+		case "1day":
+			str = __("Mark all articles in %s older than 1 day as read?");
+			break;
+		case "1week":
+			str = __("Mark all articles in %s older than 1 week as read?");
+			break;
+		case "2weeks":
+			str = __("Mark all articles in %s older than 2 weeks as read?");
+			break;
+		default:
+			str = __("Mark all articles in %s as read?");
+		}
+
 		var fn = getFeedName(feed, is_cat);
 
 		str = str.replace("%s", fn);
@@ -511,20 +433,8 @@ function catchupFeed(feed, is_cat) {
 			return;
 		}
 
-		var max_id = 0;
-
-		if (feed == getActiveFeedId() && is_cat == activeFeedIsCat()) {
-			$$("#headlines-frame > div[id*=RROW]").each(
-				function(child) {
-					var id = parseInt(child.id.replace("RROW-", ""));
-
-					if (id > max_id) max_id = id;
-				}
-			);
-		}
-
 		var catchup_query = "?op=rpc&method=catchupFeed&feed_id=" +
-			feed + "&is_cat=" + is_cat + "&max_id=" + max_id;
+			feed + "&is_cat=" + is_cat + "&mode=" + mode;
 
 		console.log(catchup_query);
 
@@ -535,15 +445,6 @@ function catchupFeed(feed, is_cat) {
 			onComplete: function(transport) {
 					handle_rpc_json(transport);
 
-					if (feed == getActiveFeedId() && is_cat == activeFeedIsCat()) {
-
-						$$("#headlines-frame > div[id*=RROW][class*=Unread]").each(
-							function(child) {
-								child.removeClassName("Unread");
-							}
-						);
-					}
-
 					var show_next_feed = getInitParam("on_catchup_show_next_feed") == "1";
 
 					if (show_next_feed) {
@@ -551,6 +452,10 @@ function catchupFeed(feed, is_cat) {
 
 						if (nuf) {
 							viewfeed(nuf, '', is_cat);
+						}
+					} else {
+						if (feed == getActiveFeedId() && is_cat == activeFeedIsCat()) {
+							viewCurrentFeed();
 						}
 					}
 
@@ -568,6 +473,8 @@ function decrementFeedCounter(feed, is_cat) {
 
 		if (ctr > 0) {
 			setFeedUnread(feed, is_cat, ctr - 1);
+			global_unread = global_unread - 1;
+			updateTitle();
 
 			if (!is_cat) {
 				var cat = parseInt(getFeedCategory(feed));
@@ -582,9 +489,9 @@ function decrementFeedCounter(feed, is_cat) {
 			}
 		}
 
-		cache_delete("feed:" + feed + ":" + is_cat);
-
 	} catch (e) {
 		exception_error("decrement_feed_counter", e);
 	}
 }
+
+
