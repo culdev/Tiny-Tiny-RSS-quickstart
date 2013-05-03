@@ -20,6 +20,8 @@ mkdir $CACHE_DIR/images
 mkdir $CACHE_DIR/export
 mkdir $CACHE_DIR/magpie
 mkdir $CACHE_DIR/simplepie
+mkdir $CACHE_DIR/js
+mkdir $CACHE_DIR/upload
 
 echo "Copying .htaccess..."
 # Copy .htaccess
