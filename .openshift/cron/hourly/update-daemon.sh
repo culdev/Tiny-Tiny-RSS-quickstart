@@ -4,6 +4,7 @@
 LOCKDIR="$OPENSHIFT_DATA_DIR/lock"
 LOCKFILE="$LOCKDIR/ttrss.pid"
 UPDATE="$OPENSHIFT_REPO_DIR/php/update.php"
+chmod +x $UPDATE
 
 if [ ! -d $LOCKDIR ]; then
     mkdir $LOCKDIR
@@ -14,8 +15,14 @@ if [ -e $LOCKFILE ]; then
     PID=$(eval echo -e `<$LOCKFILE`)
 
     if [ -e "/proc/$PID" ]; then
-    echo "The process is active!"
-    exit 2
+        echo "The process is active!"
+        
+        if ls "/proc/$PID"; then
+            exit 2
+        else
+            echo "Killing process."
+            killall update.php
+        fi
     fi
 fi
 
